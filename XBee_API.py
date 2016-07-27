@@ -4,7 +4,8 @@ MIT - SUTD  2015-2016
 """
 from serial import Serial
 from time import sleep
-import datetime
+from datetime import datetime
+import os
 
 # import XBee_msg classes and method for finding a SBee serial device
 from XB_Finder import serial_ports
@@ -13,71 +14,74 @@ from XBee_msg import *
 # create dictionary for API operations
 APIop = {0x88: ['AT Command Response', XB_locAT_IN, 1],     # name, reference to function, print (y/n)
          0x8B: ['Transmit Status', XB_RFstatus_IN, 1],
-         0x8D: ['Route Information Packet', XB_RouteInfo_IN, 0],
+         0x8D: ['Route Information Packet', XB_RouteInfo_IN, 1],
          0x90: ['Receive Packet (AO=0)', XB_RF_IN, 0],
-         0x91: ['Explicit Rx Indicator (AO=1)', XB_RFexpl_IN, 0],
+         0x91: ['Explicit Rx Indicator (AO=1)', XB_RFexpl_IN, 1],
          0x97: ['Remote Command Response', XB_remAT_IN, 1]}
 
 
-# ===============================================================================\
+# ===============================================================================
 # ===============================================================================
 #   XBeeAPI class
 # ===============================================================================
 # ===============================================================================
-class XBeeAPI:
+class XBee_module:
 
-    def __init__(self, AP=0x02, AO=0x00, DM=0x00, NO=0x04):
+    def __init__(self, port=None, baud=9600, ID=0x7FFF, AP=0x02, AO=0x00, NO=0x04):
         """
         XBee initialization
         """
 
-        # look for XBee serial port
-        self.port = serial_ports()
+        if not port:
+            port = serial_ports()
 
-        # list where to save received transmits (as objects of class XBee_msg)
+        # list where to save received transmits (as objects of class XBee_msg or children)
         self.RxMsg = list()
 
         # input buffer including all bytes from serial
         self.RxBuff = bytearray()
 
         # XBee configuration
-        self.XBconf = {'AP': AP,  # API mode
-                       'AO': AO,  # API Output format
-                       # 'DM': DM,            # DigiMesh features enabled/disabled
-                       'NO': NO}  # include additional info when network and neighbor discovery
+        self.XBconf = {'ID': ID,    # Network ID (between 0x0000 and 0x7FFF)
+                       'AP': AP,    # API mode
+                       'AO': AO,    # API Output format
+                       'NO': NO}    # include additional info when network and neighbor discovery
 
         # enquire main parameters from local XBee
-        self.params = {'ID': [],            # Network ID (between 0x0000 and 0x7FFF)
-                       'CE': [],            # Node type
-                       'BH': [],            # Broadcast radius
-                       'NT': [],            # Maximum seconds for waiting a NetworkDiscover reply (10th of sec)
-                       'SH': [],            # Serial Number High (high 32bit RF module's address)
-                       'SL': [],            # Serial Number Low (low 32bit RF module's address)
-                       'DH': '00000000',    # Destination Address High
-                       'DL': '0000FFFF',    # Destination Address Low
-                       'AP': [],            # API mode [0:no API; 1:API no escape seq; 2:API with escape seq]
-                       'AO': []}            # API output format [0:standard frames; 1:explicit addressing frames]
+        self.params = {'ID': [],    # Network ID (between 0x0000 and 0x7FFF)
+                       'CE': [],    # Node type
+                       'BH': [],    # Broadcast radius
+                       'NT': [],    # Maximum seconds for waiting a NetworkDiscover reply (10th of sec)
+                       'SH': [],    # Local Address High (high 32bit RF module's address)
+                       'SL': [],    # Local Address Low (low 32bit RF module's address)
+                       'DH': [],    # Destination Address High
+                       'DL': [],    # Destination Address Low
+                       'AP': [],    # API mode [0:no API; 1:API no escape seq; 2:API with escape seq]
+                       'AO': []}    # API output format [0:standard frames; 1:explicit addressing frames]
 
         # diagnostic parameters
-        self.diagn = {'GD': [],             # number of good frames
-                      'EA': [],             # number of timeouts
-                      'TR': [],             # number of transmission errors
-                      'DB': []}             # RSSI (signal strength) of last received packet [-dBm]
+        self.diagn = {'GD': [],     # number of good frames
+                      'EA': [],     # number of timeouts
+                      'TR': [],     # number of transmission errors
+                      'DB': []}     # RSSI (signal strength) of last received packet [-dBm]
 
         # set serial port and baud
-        self.serial_port = Serial(port=self.port, baudrate=9600)
+        self.serial_port = Serial(port=port, baudrate=baud)
 
-        # make sure no information is in the buffer
+        # make sure no information is in the serial buffer
         self._flush()
         sleep(0.2)
         self._flush()
 
         # start logging RAW data from/to XBee
-        self.rawLogFileIDstr = "./Output/XBeeRAW_log.txt"
-        self.testLogFileIDstr = "./Output/XBeeTEST_log.txt"
+        path = "./Output/"
+        if not os.path.exists(path):
+            os.makedirs(path)
+        self.rawLogFileIDstr = path + "XBeeRAW_log" + str(datetime.datetime.now()) + ".txt"
+        self.testLogFileIDstr = path + "XBeeTEST_log" + str(datetime.datetime.now()) + ".txt"
         self.setFile()
 
-        logStr = '\n\nXBee Communicating via ' + self.port
+        logStr = '\n\nXBee Communicating via ' + port
         print(logStr)
         self.logRAWtofile(logStr)
         logStr = 'Programming XBee for API mode {0}...'.format(self.XBconf['AP'])
@@ -86,15 +90,15 @@ class XBeeAPI:
 
         # set parameters' values from self.XBconf
         for param in self.XBconf:
-            print(self.setgetLocalRegister(param, self.XBconf[param]))
+            print(self.setLocalRegister(param, self.XBconf[param]))
             sleep(0.05)
-            self.read()
+            self.readSerial()
 
         # get parameters' values from XBee memory
         for param in self.params:
-            print(self.setgetLocalRegister(param))
+            print(self.getLocalRegister(param))
             sleep(0.05)
-            self.read()
+            self.readSerial()
 
         logStr = 'XBee initialization complete!\n'
         print(logStr)
@@ -104,7 +108,13 @@ class XBeeAPI:
 # ===============================================================================
 #   define methods for Frame-Specific Data Construction
 # ===============================================================================
-    def setgetLocalRegister(self, command, value=None, frame_ID=0x52):
+    def setLocalRegister(self, command, value, frame_ID=0x52):
+        return self._setgetLocalRegister(command, value, frame_ID=frame_ID)
+
+    def getLocalRegister(self, command, frame_ID=0x52):
+        return self._setgetLocalRegister(command, frame_ID=frame_ID)
+
+    def _setgetLocalRegister(self, command, value=None, frame_ID=0x52):
         """
         Query or set module parameters on the local device.
 
@@ -125,7 +135,13 @@ class XBeeAPI:
 
         return XBmsg
 
-    def setgetRemoteRegister(self, command, value=None, frame_ID=0x01):
+    def setRemoteRegister(self, destH, destL, command, value, frame_ID=0x01):
+        return self._setgetRemoteRegister(destH, destL, command, value, frame_ID=frame_ID)
+
+    def getRemoteRegister(self, destH, destL, command, frame_ID=0x01):
+        return self._setgetRemoteRegister(destH, destL, command, frame_ID=frame_ID)
+
+    def _setgetRemoteRegister(self, destH, destL, command, value=None, frame_ID=0x01):
         """
         Query or set module parameters on a remote device.
 
@@ -136,6 +152,9 @@ class XBeeAPI:
         :return: XBee_msg object containing the created message.
                 Can be printed using print(setRemoteRegister(..))
         """
+        self.params['DH'] = destH
+        self.params['DL'] = destL
+
         # create new XB_remAT object and write to serial
         XBmsg = XB_remAT_OUT(self.params, command, regVal=value, frame_ID=frame_ID)
         if XBmsg.isValid():
@@ -146,17 +165,22 @@ class XBeeAPI:
 
         return XBmsg
 
-    def sendDataToRemote(self, data, frame_ID=0x01, option=0x00, reserved='fffe'):
+    def sendDataToRemote(self, destH, destL, data, frame_ID=0x01, option=0x00, reserved='fffe'):
         """
         Send data as an RF packet to the specified destination.
 
+        :param destH: high address of the destination XBee
+        :param destL: low address of the destination XBee
         :param data: content of the transmit as bytearray
         :param frame_ID: default value 0x01. Change it if you know what you are doing..
-        :param option: default value 0x00. can be changed to 0x01
+        :param option: default value 0x00. can be changed to 0x08 for trace routing
         :param reserved: should be 'FFFE' unless for trace routing = 'FFFF'
         :return: XBee_msg object containing the created message.
                 Can be printed using print(sendDataToRemote(..))
         """
+        self.params['DH'] = destH
+        self.params['DL'] = destL
+
         # create new XB_remAT object and write to serial
         XBmsg = XB_RF_OUT(self.params, data, frame_ID=frame_ID, option=option, reserved=reserved)
         if XBmsg.isValid():
@@ -182,7 +206,7 @@ class XBeeAPI:
         self.serial_port.flushOutput()
 
         while self.serial_port.inWaiting():
-            dump_incoming = self.serial_port.read()
+            self.serial_port.read()
 
     def _write(self, msg):
         """
@@ -192,13 +216,16 @@ class XBeeAPI:
         """
         self.serial_port.write(msg)
 
-    def read(self):
+    def readSerial(self):
         """
         Receives data from serial and
         checks buffer for potential messages.
         Stacks all messages into the queue
         if available, for later execution.
         """
+        # clear received correct message as object list
+        self.RxMsg = list()
+
         # Read incoming buffer and pack it into the RxStream
         while self.serial_port.inWaiting():
             incoming = self.serial_port.read()
@@ -216,12 +243,13 @@ class XBeeAPI:
             # discard last obj and put msg back in buffer
             self.RxMsg.pop(-1)
             self.RxBuff = msgs[-1][1:]
-        elif 1 < len(msgs[-1]) < 4:
-            # print('lss than 4bytes on: {0}'.format(''.join('{:02x}'.format(byte) for byte in msgs[-1])))
+        elif not XBee_msg.validate(XBee_msg.unescape(msgs[-1]))[0]:
             self.RxBuff = msgs[-1][1:]
         else:
             # clear the buffer
             self.RxBuff = bytearray()
+
+        return self.RxMsg
 
 
 # ===============================================================================
@@ -237,7 +265,8 @@ class XBeeAPI:
             # put back previously removed start delimiter
             msg.insert(0, 0x7E)
 
-            if not msg or len(msg) < 4:
+            # use static methods from XBee_msg class to validate the msg
+            if not XBee_msg.validate(XBee_msg.unescape(msg))[0]:
                 continue
 
             # create XB_msg object depending on the frame_type
@@ -271,47 +300,62 @@ class XBeeAPI:
 # ===============================================================================
 #   Custom methods for swarming
 # ===============================================================================
-    def swarmTopologicalBroadcast(self):
-        # TODO: here create a function which, before broadcasting, first looks and
-        # finds the neighbors, put a limit on them (topology), and then makes single
-        # communication to them, expecting the ACK.
-        # this is because when using the XBee broadcast, every device sends the info
-        # MT+1 times to every other device within its RF range. Furthermore, since
-        # each device in our project is a router (not endpoint), then each device
-        # will then re-broadcast MT+1 times the same info.
-        # Considering our RF range is now pretty big (~400m) to total communications
-        # initiated by 1 broadcast is huge (MT+1)*n, where n=num devices
+#     def swarmTopologicalBroadcast(self):
+#         # TODO: here create a function which, before broadcasting, first looks and
+#         # finds the neighbors, put a limit on them (topology), and then makes single
+#         # communication to them, expecting the ACK.
+#         # this is because when using the XBee broadcast, every device sends the info
+#         # MT+1 times to every other device within its RF range. Furthermore, since
+#         # each device in our project is a router (not endpoint), then each device
+#         # will then re-broadcast MT+1 times the same info.
+#         # Considering our RF range is now pretty big (~400m) to total communications
+#         # initiated by 1 broadcast is huge (MT+1)*n, where n=num devices
+#
+#         # problem here is however how to know when, if received something, if need to
+#         # broadcast or not.. (if it was alr received before)
+#
+#         return
 
-        # problem here is however how to know when, if received something, if need to
-        # broadcast or not.. (if it was alr received before)
-
-        return
-
-    def findNeighbors(self, buoy):
+    def findNeighbors(self, destH, destL):
         """
         XBee provides a feature to discover and report all RF modules found within
         immediate RF range
 
+        :param destH: high address of link receiving device
+        :param destL: low address of link receiving device
         :return:
         """
-        if buoy == 'LOCAL':
-            print(self.setgetLocalRegister('FN'))
+        if destH.upper() == 'LOCAL' or destL.upper() == 'LOCAL':
+            print(self.getLocalRegister('FN'))
 
             return
-        elif buoy == 'GLOBAL':
-            print('Attempting to trace routing a broadcast! not allowed :(')
+        elif destH.upper() == 'GLOBAL' or destL.upper() == 'GLOBAL':
+            print('Attempting to broadcast findNeighbors! not allowed :(')
             return
 
-        self.params['DH'] = '0013A200'
-        self.params['DL'] = buoy
+        # check consistency of the input address
+        destH = self._checkAddrConsistency(destH)
+        destL = self._checkAddrConsistency(destL)
+        if not destH or not destL:
+            return
 
-        print(self.setgetRemoteRegister('FN'))
+        # if address equal to local XBee, then use local register methods
+        if destH.lower() == self.params['SH'] and destL.lower() == self.params['SL']:
+            print(self.getLocalRegister('FN'))
+
+            return
+        # if address is for broadcast, then stop! not allowed
+        elif destH.lower() == '00000000' and destL.lower() == '0000ffff':
+            print('Attempting to broadcast findNeighbors! not allowed :(')
+            return
+
+        print(self.getRemoteRegister(destH, destL, 'FN'))
 
 
 # ===============================================================================
 #   Test Link
 # ===============================================================================
-    def networkLinkTest(self, senderH, senderL, destH, destL):
+    def linkQualityTest(self, senderH, senderL, destH, destL, byteToTest=0x20, iterationsToTest=200):
         """
         XBee provided features, which allows to test the link between the local
         device and a remote one. Note is not possible to broadcast this information
@@ -320,6 +364,8 @@ class XBeeAPI:
         :param senderL: low address of link starting device
         :param destH: high address of link receiving device
         :param destL: low address of link receiving device
+        :param byteToTest: number of bytes to test in each iteration
+        :param iterationsToTest: number of iterations for repeating the test.
         :return: None
         """
         # check data consistency
@@ -342,14 +388,16 @@ class XBeeAPI:
 
         # define test data as bytearray as: destination address, payload size (2bytes), iterations (max 4000)
         testData = bytearray.fromhex(destH) + bytearray.fromhex(destL) \
-                   + bytearray([0x00, 0x20]) + bytearray([0x00, 0xC8])
+                   + bytearray.fromhex('{:04x}'.format(byteToTest)) \
+                   + bytearray.fromhex('{:04x}'.format(iterationsToTest))
         XBmsg = XB_RFexpl_OUT(self.params, testData, 0xE6, 0xE6, '0014')
         if XBmsg.isValid():
             self._write(XBmsg.genFrame())
             print(XBmsg)
             # print(XBmsg.getHexCmd())
 
-    def _checkAddrConsistency(self, addr):
+    @staticmethod
+    def _checkAddrConsistency(addr):
         """
         check the given address is of type str and length 8.
         If addr is provided as bytearray it is converted to str.
@@ -372,46 +420,41 @@ class XBeeAPI:
 
         :return:
         """
-        print(self.setgetLocalRegister('ND'))
+        print(self.getLocalRegister('ND'))
 
-    def traceRoute(self, buoy):
-        if buoy == 'LOCAL':
-            print(self.setgetLocalRegister('FN'))
+    def traceRoute(self, destH, destL):
+        """
+        Attempt a route tracing when sending data to the defined XBee.
+        Not acceptable to trace local XBee or broadcast
 
+        :param destH: high address of link receiving device
+        :param destL: low address of link receiving device
+        :return:
+        """
+        if destH.upper() == 'LOCAL' or destH.upper() == 'LOCAL':
+            print('Attempting to trace routing the local XBee! not allowed :(')
             return
-        elif buoy == 'GLOBAL':
-            print('Attempting to trace routing a broadcast! not allowed :(')
+        elif destH.upper() == 'GLOBAL' or destH.upper() == 'GLOBAL':
+            print('Attempting to broadcast trace routing! not allowed :(')
             return
 
-        self.params['DH'] = '0013A200'
-        self.params['DL'] = buoy
+        # check consistency of the input address
+        destH = self._checkAddrConsistency(destH)
+        destL = self._checkAddrConsistency(destL)
+        if not destH or not destL:
+            return
 
-        msg = self.sendDataToRemote(bytearray([1, 2, 3]), option=0x08, reserved='ffff')
-        print(msg.getHexCmd())
+        # if address is local or for broadcast, then stop! not allowed
+        if destH.lower() == self.params['SH'] and destL.lower() == self.params['SL']:
+            print('Attempting to trace routing the local XBee! not allowed :(')
+            return
+        elif destH.lower() == '00000000' and destL.lower() == '0000ffff':
+            print('Attempting to broadcast trace routing! not allowed :(')
+            return
+
+        msg = self.sendDataToRemote(destH, destL, bytearray([1, 2, 3]), option=0x08, reserved='ffff')
+        # print(msg.getHexCmd())
         print(msg)
-
-
-# ===============================================================================
-#   Establish Button Procedures
-# ===============================================================================
-    def send_Command(self, command):
-
-        com = ','.join(command)
-        print(self.sendDataToRemote(bytearray(com.encode())))
-        print(com)
-
-    def set_Buoy(self, buoy):
-
-        self.params['DH'] = '0013A200'
-
-        if buoy == 'GLOBAL':
-            self.params['DH'] = '00000000'
-            buoy = '0000FFFF'
-
-        self.params['DL'] = buoy
-        print('DH: %s' % self.params['DH'])
-        print('DL: %s' % self.params['DL'])
-
 
 # ===============================================================================
 #   Log RAW data coming/outgoing from/to XBee
@@ -427,7 +470,7 @@ class XBeeAPI:
         print("Storing RAW Xbee log to: " + self.rawLogFileIDstr)
         print("Storing test Xbee log to: " + self.testLogFileIDstr)
         fileID = open(self.testLogFileIDstr, 'a')
-        fileID.write("\n\n" + str(datetime.datetime.now()) + " new TEST attempt\n")
+        fileID.write("\n\n\n" + str(datetime.datetime.now()) + " new TEST attempt\n")
         fileID.flush()
 
     def logRAWtofile(self, line):
@@ -454,4 +497,4 @@ class XBeeAPI:
 # ===============================================================================
     def __str__(self):
 
-        return "XBee " + self.params['SL'] + " Communicating via " + self.serial_port
+        return "XBee " + str(self.params['SL']) + " Communicating via " + self.serial_port

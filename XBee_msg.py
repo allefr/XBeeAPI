@@ -90,7 +90,8 @@ class XBee_msg:
         """
         return self.valid
 
-    def _validate(self, msg):
+    @staticmethod
+    def validate(msg):
         """
         Verify Checksum and Length in received
         message against calculated based on
@@ -99,16 +100,18 @@ class XBee_msg:
         :param msg: full frame message obtained, given as bytearray
         :return: None
         """
-        self.valid = True
+        valid = True
 
         if not msg or len(msg) < 4:
-            self.valid = False
+            return False, -1, -1
 
-        # if escape sequence used in the msg, remove it (if not, then nothing is done)
-        msg = self._unescape(msg)
-
-        self.checksum = msg[-1]
-        self.length = int.from_bytes(msg[1:3], byteorder='big', signed=False)
+        checksum = msg[-1]
+        length = int(''.join('{:02X}'.format(byte) for byte in msg[1:3]), 16)
+        # try:
+        #     # here works for pyton 3 only
+        #     length = int.from_bytes(msg[1:3], byteorder='big', signed=False)
+        # except Exception:
+        #     length = int(''.join('{:02X}'.format(byte) for byte in msg[1:3]), 16)
 
         validlen = len(msg[3:-1])
         validsum = 0xFF - ((sum(msg[3:-1])) & 0xFF)
@@ -117,14 +120,15 @@ class XBee_msg:
         # print('checksum: ' + str(self.checksum) + '; ' + str(validsum))
 
         # check sanity of computed Length and Checksum with the one in the message
-        if (self.checksum != validsum) or (self.length != validlen):
-            self.valid = False
+        if (checksum != validsum) or (length != validlen):
+            valid = False
 
-        return msg
+        return valid, length, checksum
 
     # ===============================================================================
     #   Add/Remove Escaping Sequences
-    def _escape(self, msg):
+    @staticmethod
+    def _escape(msg):
         """
         Escape reserved characters to ensure accurate
         message transmission and reception
@@ -143,7 +147,8 @@ class XBee_msg:
 
         return escaped
 
-    def _unescape(self, msg):
+    @staticmethod
+    def unescape(msg):
         """
         Retrieve unescaped message from escaped message
         in order to understand intended message
@@ -262,10 +267,10 @@ class XB_locAT_OUT(XBee_msg):
 
     def __str__(self):
         if self.reg_value is not None:
-            return "{0} OUT (addr:  local  ) Set registry '{1}' to '{2}'".format(self.time_stmp, self.ATcmd,
+            return "{0} OUT (addr:  local  ) Set registry '{1}' to '{2}'".format(self.time_stmp[:-3], self.ATcmd,
                 str(''.join('{:02X}'.format(byte) for byte in self.reg_value)))
 
-        return "{0} OUT (addr:  local  ) Get '{1}' registry".format(self.time_stmp, self.ATcmd)
+        return "{0} OUT (addr:  local  ) Get '{1}' registry".format(self.time_stmp[:-3], self.ATcmd)
 
 
 # ===============================================================================
@@ -365,16 +370,16 @@ class XB_remAT_OUT(XBee_msg):
 
     def getHexCmd(self):
         # create hex string of the command, having already provided all the information
-        self._hexStr(self._unescape(self.genFrame()))
+        self._hexStr(self.unescape(self.genFrame()))
 
         return self.hexMsg
 
     def __str__(self):
         if self.reg_value is not None:
-            return "{0} OUT (addr: {1}) Set registry '{2}' to '{3}'".format(self.time_stmp, self.destAddrLow,
+            return "{0} OUT (addr: {1}) Set registry '{2}' to '{3}'".format(self.time_stmp[:-3], self.destAddrLow,
                                                                             self.ATcmd, str(self.reg_value))
 
-        return "{0} OUT (addr: {1}) Get '{2}' registry".format(self.time_stmp, self.destAddrLow, self.ATcmd)
+        return "{0} OUT (addr: {1}) Get '{2}' registry".format(self.time_stmp[:-3], self.destAddrLow, self.ATcmd)
 
 
 # ===============================================================================
@@ -404,6 +409,7 @@ class XB_RF_OUT(XBee_msg):
             self.reserved = bytearray.fromhex(reserved)
         else:
             print('reserved type wrong. Should be either bytearray (2 bytes) ot string (4 bytes)')
+            self.valid = False
             return
 
         # communication radius [0: maximum hop]
@@ -456,7 +462,7 @@ class XB_RF_OUT(XBee_msg):
 
     def getHexCmd(self):
         # create hex string of the command, having already provided all the information
-        self._hexStr(self._unescape(self.genFrame()))
+        self._hexStr(self.unescape(self.genFrame()))
 
         return self.hexMsg
 
@@ -465,7 +471,7 @@ class XB_RF_OUT(XBee_msg):
         if self.destAddrHigh == '00000000' and (self.destAddrLow == '0000FFFF' or self.destAddrLow == '0000ffff'):
             addr = ' GLOBAL '
 
-        return "{0} OUT (addr: {1}) data: hex'{2}'".format(self.time_stmp, addr,
+        return "{0} OUT (addr: {1}) data: hex'{2}'".format(self.time_stmp[:-3], addr,
                                                            ''.join('{:02X}'.format(byte) for byte in self.data))
 
 
@@ -496,8 +502,16 @@ class XB_RFexpl_OUT(XBee_msg):
         # cluster ID
         if type(clusterID) == bytearray:
             # then it is alr in the correct format
+            if len(clusterID) != 2:
+                print('clusterID value {0} should be 2 bytes!'.format(clusterID))
+                self.valid = False
+                return
             self.clusterID = clusterID
         elif type(clusterID) == str:
+            if len(clusterID) != 4:
+                print('clusterID value {0} should be 2 bytes (4 hex string)!'.format(clusterID))
+                self.valid = False
+                return
             self.clusterID = bytearray.fromhex(clusterID)
         elif type(clusterID) == int:
             if clusterID > 65535:
@@ -506,15 +520,23 @@ class XB_RFexpl_OUT(XBee_msg):
                 return
             self.clusterID = bytearray.fromhex('{:04X}'.format(clusterID))
         else:
-            print('Uncoded type(clusterID): {0}'.format(type(clusterID)))
+            print('Uncoded type(clusterID): {0}... Please use bytearray, str or int'.format(type(clusterID)))
             self.valid = False
             return
 
         # profile ID
         if type(profileID) == bytearray:
             # then it is alr in the correct format
+            if len(profileID) != 2:
+                print('profileID value {0} should be 2 bytes!'.format(profileID))
+                self.valid = False
+                return
             self.profileID = profileID
         elif type(profileID) == str:
+            if len(profileID) != 4:
+                print('profileID value {0} should be 2 bytes (4 hex string)!'.format(profileID))
+                self.valid = False
+                return
             self.profileID = bytearray.fromhex(profileID)
         elif type(profileID) == int:
             if profileID > 65535:
@@ -523,7 +545,7 @@ class XB_RFexpl_OUT(XBee_msg):
                 return
             self.profileID = bytearray.fromhex('{:04X}'.format(profileID))
         else:
-            print('Uncoded type(profileID): {0}'.format(type(profileID)))
+            print('Uncoded type(profileID): {0}... Please use bytearray, str or int'.format(type(profileID)))
             self.valid = False
             return
 
@@ -583,7 +605,7 @@ class XB_RFexpl_OUT(XBee_msg):
 
     def getHexCmd(self):
         # create hex string of the command, having already provided all the information
-        self._hexStr(self._unescape(self.genFrame()))
+        self._hexStr(self.unescape(self.genFrame()))
 
         return self.hexMsg
 
@@ -591,10 +613,10 @@ class XB_RFexpl_OUT(XBee_msg):
         addr = self.destAddrLow.lower()
         if addr == self.XBparams['SL'].lower():
             addr = ' local  '
-        if self.destAddrHigh == '00000000' and addr == '0000ffff':
+        elif self.destAddrHigh == '00000000' and addr == '0000ffff':
             addr = ' GLOBAL '
 
-        return "{0} OUT (addr: {1}) explicit transmit; data: hex'{2}'".format(self.time_stmp, addr,
+        return "{0} OUT (addr: {1}) explicit transmit; data: hex'{2}'".format(self.time_stmp[:-3], addr,
             ''.join('{:02X}'.format(byte) for byte in self.data))
 
 
@@ -616,8 +638,11 @@ class XB_locAT_IN(XBee_msg):
         self.cmdStatus = 0x00
         self.reg_value = None
 
-        # unescape and validate frame
-        frameun = self._validate(frame)
+        # if escape sequence used in the msg, remove it (if not, then nothing is done)
+        frameun = self.unescape(frame)
+
+        # validate frame
+        self.valid, self.length, self.checksum = self.validate(frameun)
 
         # convert input from bytearray to hex str
         self._hexStr(frameun)
@@ -649,25 +674,25 @@ class XB_locAT_IN(XBee_msg):
 
             # set params[AT] to the received value -> note this will change the original too in XBee_API class!!
             try:
-                self.XBparams[self.ATcmd] = self.reg_value
+                self.XBparams[self.ATcmd] = self.reg_value.lower()
             except KeyError:
                 pass
 
     def __str__(self):
         if self.reg_value is None:
             try:
-                strin = "{0}  IN (addr:  local  ) Registry '{1}' has been set; [{2}]".format(self.time_stmp,
+                strin = "{0}  IN (addr:  local  ) Registry '{1}' has been set; [{2}]".format(self.time_stmp[:-3],
                     self.ATcmd, ATstatus[self.cmdStatus])
             except KeyError:
-                strin = "{0}  IN (addr:  local  ) Registry '{1}' has been set; [status: {2}]".format(self.time_stmp,
-                    self.ATcmd, self.cmdStatus)
+                strin = "{0}  IN (addr:  local  ) Registry '{1}' has been set; [status: {2}]".format(
+                    self.time_stmp[:-3], self.ATcmd, self.cmdStatus)
             return strin
 
         try:
-            strin = "{0}  IN (addr:  local  ) Registry '{1}' = '{2}'; [{3}]".format(self.time_stmp,
+            strin = "{0}  IN (addr:  local  ) Registry '{1}' = '{2}'; [{3}]".format(self.time_stmp[:-3],
                 self.ATcmd, self.reg_value, ATstatus[self.cmdStatus])
         except KeyError:
-            strin = "{0}  IN (addr:  local  ) Registry '{1}' = '{2}'; [status: {3}]".format(self.time_stmp,
+            strin = "{0}  IN (addr:  local  ) Registry '{1}' = '{2}'; [status: {3}]".format(self.time_stmp[:-3],
                 self.ATcmd, self.reg_value, self.cmdStatus)
         return strin
 
@@ -694,8 +719,11 @@ class XB_remAT_IN(XBee_msg):
         self.cmdStatus = 0x00
         self.reg_value = None
 
-        # unescape and validate frame
-        frameun = self._validate(frame)
+        # if escape sequence used in the msg, remove it (if not, then nothing is done)
+        frameun = self.unescape(frame)
+
+        # validate frame
+        self.valid, self.length, self.checksum = self.validate(frameun)
 
         # convert input from bytearray to hex str
         self._hexStr(frameun)
@@ -732,18 +760,18 @@ class XB_remAT_IN(XBee_msg):
     def __str__(self):
         if self.reg_value is None:
             try:
-                strin = "{0}  IN (addr: {1}) Registry '{2}' has been set; [{3}]".format(self.time_stmp,
+                strin = "{0}  IN (addr: {1}) Registry '{2}' has been set; [{3}]".format(self.time_stmp[:-3],
                     self.destAddrLow, self.ATcmd, ATstatus[self.cmdStatus])
             except KeyError:
-                strin = "{0}  IN (addr: {1}) Registry '{2}' has been set; [status: {3}]".format(self.time_stmp,
+                strin = "{0}  IN (addr: {1}) Registry '{2}' has been set; [status: {3}]".format(self.time_stmp[:-3],
                     self.destAddrLow, self.ATcmd, self.cmdStatus)
             return strin
 
         try:
-            strin = "{0}  IN (addr: {1}) Registry '{2}' = '{3}'; [{4}]".format(self.time_stmp, self.destAddrLow,
+            strin = "{0}  IN (addr: {1}) Registry '{2}' = '{3}'; [{4}]".format(self.time_stmp[:-3], self.destAddrLow,
                 self.ATcmd, self.reg_value, ATstatus[self.cmdStatus])
         except KeyError:
-            strin = "{0}  IN (addr: {1}) Registry '{2}' = '{3}'; [status : {4}]".format(self.time_stmp,
+            strin = "{0}  IN (addr: {1}) Registry '{2}' = '{3}'; [status : {4}]".format(self.time_stmp[:-3],
                 self.destAddrLow, self.ATcmd, self.reg_value, self.cmdStatus)
         return strin
 
@@ -768,8 +796,11 @@ class XB_RF_IN(XBee_msg):
 
         self.option = 0x01  # [1: toMe; 2: broadcast]
 
-        # unescape and validate frame
-        frameun = self._validate(frame)
+        # if escape sequence used in the msg, remove it (if not, then nothing is done)
+        frameun = self.unescape(frame)
+
+        # validate frame
+        self.valid, self.length, self.checksum = self.validate(frameun)
 
         # convert input from bytearray to hex str
         self._hexStr(frameun)
@@ -799,11 +830,11 @@ class XB_RF_IN(XBee_msg):
 
     def __str__(self):
         try:
-            strin = "{0}  IN (addr: {1}) data: hex'{2}'; [{3}]".format(self.time_stmp, self.destAddrLow,
+            strin = "{0}  IN (addr: {1}) data: hex'{2}'; [{3}]".format(self.time_stmp[:-3], self.destAddrLow,
                                 ''.join('{:02X}'.format(byte) for byte in self.data), RFoption[self.option])
         except KeyError:
-            strin = "{0}  IN (addr: {1}) data: hex'{2}'; [status: {3}]".format(self.time_stmp, self.destAddrLow, ''.join(
-                '{:02X}'.format(byte) for byte in self.data), self.option)
+            strin = "{0}  IN (addr: {1}) data: hex'{2}'; [status: {3}]".format(self.time_stmp[:-3], self.destAddrLow,
+                ''.join('{:02X}'.format(byte) for byte in self.data), self.option)
 
         return strin
 
@@ -833,8 +864,11 @@ class XB_RFexpl_IN(XBee_msg):
 
         self.option = 0x01  # [1: toMe; 2: broadcast]
 
-        # unescape and validate frame
-        frameun = self._validate(frame)
+        # if escape sequence used in the msg, remove it (if not, then nothing is done)
+        frameun = self.unescape(frame)
+
+        # validate frame
+        self.valid, self.length, self.checksum = self.validate(frameun)
 
         # convert input from bytearray to hex str
         self._hexStr(frameun)
@@ -869,10 +903,10 @@ class XB_RFexpl_IN(XBee_msg):
         if addr == self.XBparams['SL'].lower():
             addr = ' local  '
         try:
-            strin = "{0}  IN (addr: {1}) explicit transmit data: hex'{2}'; [{3}]".format(self.time_stmp,
+            strin = "{0}  IN (addr: {1}) explicit transmit data: hex'{2}'; [{3}]".format(self.time_stmp[:-3],
                 addr, ''.join('{:02X}'.format(byte) for byte in self.data), RFoption[self.option])
         except KeyError:
-            strin = "{0}  IN (addr: {1}) explicit transmit data: hex'{2}'; [status: {3}]".format(self.time_stmp,
+            strin = "{0}  IN (addr: {1}) explicit transmit data: hex'{2}'; [status: {3}]".format(self.time_stmp[:-3],
                 addr, ''.join('{:02X}'.format(byte) for byte in self.data), self.option)
 
         return strin
@@ -897,8 +931,11 @@ class XB_RFstatus_IN(XBee_msg):
         self.status = 0x00
         self.discovSt = 0x00
 
-        # unescape and validate frame
-        frameun = self._validate(frame)
+        # if escape sequence used in the msg, remove it (if not, then nothing is done)
+        frameun = self.unescape(frame)
+
+        # validate frame
+        self.valid, self.length, self.checksum = self.validate(frameun)
 
         # convert input from bytearray to hex str
         self._hexStr(frameun)
@@ -926,11 +963,11 @@ class XB_RFstatus_IN(XBee_msg):
 
     def __str__(self):
         try:
-            strin = "{0}  IN (addr: network ) ACK #tries: {1}; [{2}]; [{3}]".format(self.time_stmp,
+            strin = "{0}  IN (addr: network ) ACK #tries: {1}; [{2}]; [{3}]".format(self.time_stmp[:-3],
                 str(self.tries), RFdiscSt[self.discovSt], RFstatus[self.status])
         except KeyError:
             strin = "{0}  IN (addr: network ) ACK #tries: {1}; [discovery status: {2}]; " \
-                "[status: {3}]".format(self.time_stmp, str(self.tries), str(self.discovSt), str(self.status))
+                "[status: {3}]".format(self.time_stmp[:-3], str(self.tries), str(self.discovSt), str(self.status))
 
         return strin
 
@@ -956,8 +993,11 @@ class XB_RouteInfo_IN(XBee_msg):
         self.responderAddr = ''
         self.receiverAddr = ''
 
-        # unescape and validate frame
-        frameun = self._validate(frame)
+        # if escape sequence used in the msg, remove it (if not, then nothing is done)
+        frameun = self.unescape(frame)
+
+        # validate frame
+        self.valid, self.length, self.checksum = self.validate(frameun)
 
         # convert input from bytearray to hex str
         self._hexStr(frameun)
@@ -986,5 +1026,5 @@ class XB_RouteInfo_IN(XBee_msg):
         self.receiverAddr = ''.join('{:02x}'.format(byte) for byte in frame[37:45])
 
     def __str__(self):
-        return "{0}  IN (addr: {1}) Route Info '{2}' to '{3}'; receiver: {4}".format(self.time_stmp,
-            self.responderAddr, self.srcAddr, self.destAddr, self.receiverAddr)
+        return "{0}  IN (addr: {1}) Route Info '{2}' to '{3}'; receiver: {4}".format(self.time_stmp[:-3],
+            self.responderAddr[8:], self.srcAddr[8:], self.destAddr[8:], self.receiverAddr[8:])
