@@ -125,7 +125,7 @@ class XBee_module:
         :return: XBee_msg object containing the created message.
                 Can be printed using print(setLocalRegister(..))
         """
-        # create new XB_locAT object and write to serial
+        # create new XB_locAT_OUT object and write to serial
         XBmsg = XB_locAT_OUT(self.params, command, regVal=value, frame_ID=frame_ID)
         if XBmsg.isValid():
             self._write(XBmsg.genFrame())
@@ -155,7 +155,7 @@ class XBee_module:
         self.params['DH'] = destH
         self.params['DL'] = destL
 
-        # create new XB_remAT object and write to serial
+        # create new XB_remAT_OUT object and write to serial
         XBmsg = XB_remAT_OUT(self.params, command, regVal=value, frame_ID=frame_ID)
         if XBmsg.isValid():
             self._write(XBmsg.genFrame())
@@ -178,10 +178,15 @@ class XBee_module:
         :return: XBee_msg object containing the created message.
                 Can be printed using print(sendDataToRemote(..))
         """
+        # check data consistency
+        if type(data) == str:
+            # change it to bytearray
+            data = bytearray(data.encode())
+
         self.params['DH'] = destH
         self.params['DL'] = destL
 
-        # create new XB_remAT object and write to serial
+        # create new XB_RF_OUT object and write to serial
         XBmsg = XB_RF_OUT(self.params, data, frame_ID=frame_ID, option=option, reserved=reserved)
         if XBmsg.isValid():
             self._write(XBmsg.genFrame())
@@ -190,6 +195,25 @@ class XBee_module:
             self.logRAWtofile(XBmsg)
 
         return XBmsg
+
+    def broadcastData(self, data, frame_ID=0x01, option=0x00, reserved='fffe'):
+        """
+        Send data as an RF packet to the specified destination.
+
+        :param destH: high address of the destination XBee
+        :param destL: low address of the destination XBee
+        :param data: content of the transmit as bytearray
+        :param frame_ID: default value 0x01. Change it if you know what you are doing..
+        :param option: default value 0x00. can be changed to 0x08 for trace routing
+        :param reserved: should be 'FFFE' unless for trace routing = 'FFFF'
+        :return: XBee_msg object containing the created message.
+                Can be printed using print(sendDataToRemote(..))
+        """
+        destH = '00000000'
+        destL = '0000ffff'
+
+        # same as sendDataToRemote() with defined destH and destL
+        return self.sendDataToRemote(destH, destL, data, frame_ID=frame_ID, option=option, reserved=reserved)
 
 
 # ===============================================================================
@@ -266,7 +290,8 @@ class XBee_module:
             msg.insert(0, 0x7E)
 
             # use static methods from XBee_msg class to validate the msg
-            if not XBee_msg.validate(XBee_msg.unescape(msg))[0]:
+            msg = XBee_msg.unescape(msg)
+            if not XBee_msg.validate(msg)[0]:
                 continue
 
             # create XB_msg object depending on the frame_type
