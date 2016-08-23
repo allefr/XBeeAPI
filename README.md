@@ -11,6 +11,7 @@ This implementation is including all the main features described in the DigiMesh
 - [x] setRemoteRegister()
 - [x] getRemoteRegister()
 - [x] sendDataToRemote()
+- [x] broadcastData()
 - [x] readSerial()
 
 also including some more specific and usually not implemented features:
@@ -140,13 +141,35 @@ A possible example can be:
 data = bytearray([0x01, 0x02, 0x03])
 XB.sendDataToRemote(’0013a200’, ’40e44b94’, data)
 ```
-Note that the data must be format as bytearray.
+Note that the data can be formatted as bytearray or as string.
 
 The method will generate and send the created DigiMesh frame to the serial communication.
 
 It outputs the created XBee message object, which - for instance - can be then printed in the form:
 ```
 2016-07-04 12:44:23.563 OUT (addr: 40e44b94) data: hex’010203’
+```
+
+###  broadcastData()
+Method used for broadcasting data to all XBee Devices in the Network.
+This method requires the following parameters:
+- ```data```: data to send, formatted as bytearray;
+- ```frame_ID``` (default: ```0x01```): can be set differently if mission specific;
+- ```option``` (default: ```0x00```): set to 0x08 for Route Tracing;
+- ```reserved``` (default: ```0xFFFE```): set to ```0xFFFF``` for Route Tracing.
+
+A possible example can be:
+```
+data = "hello"
+XB.sendDataToRemote(data)
+```
+Note that the data can be formatted as bytearray or as string.
+
+The method will generate and send the created DigiMesh frame to the serial communication.
+
+It outputs the created XBee message object, which - for instance - can be then printed in the form:
+```
+2016-07-04 12:44:23.563 OUT (addr:  GLOBAL ) data: hex’68656C6C6F’
 ```
 
 ### readSerial()
