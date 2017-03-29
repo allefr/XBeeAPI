@@ -6,11 +6,14 @@ For the API mode, all message types are coded as classes, children of parent cla
 
 
 ## Usage
-This implementation allows to reprogram an XBee module at the condition of knowing the baud rate used.
+This implementation allows to reprogram an XBee module **without knowing any of the configuration initially flashed inside**.
+
 If it's not known the serial port to use for connecting to the XBee module, leaving the `port` argument as `None` will trigger the call to `XB_Finder.py`, which looks for possible valid instances of serial communication devices.
 `XB_Finder` method has been tested on Mac, Windows and Linux operating systems.
 
-It is possible to use more than 1 XBee module at the same time; if so it is however required to input the `port` argument, as the `XB_Finder` will only use the first available instance.
+If the baud rate to use is different from the one used by the module, a method will check all the possible bauds to first find which baud to use for communicating with the module and then change it to the new one.
+
+It is possible to use more than one XBee module at the same time; if so it is however required to input the `port` argument, as the `XB_Finder` will only use the first available instance.
 
 ### Create XBee object
 Before using any other methods, a XBee API object must be created.
@@ -36,10 +39,10 @@ XB = XBee_module()
 If the XBee module was found in the list of serial ports available, the XBee is initialized. If no XBee
 Module can be found, an error is raised.
 
-A different example setting up the XBee as EndPoint (no message relaying) in Transparent Mode can be:
+A different example setting up the XBee as EndPoint (no message relaying) in Transparent Mode with baud 57600 can be:
 ```
 from XBee_API import XBee_module
-XB = XBee_module(AP=0, CE=2)
+XB = XBee_module(baud=57600, AP=0, CE=2)
 ```
 
 ### Reading and Writing: Threading advisable
@@ -47,6 +50,8 @@ This API does not provide any threaded implementation as it is expected a thread
 The user can create a separate thread which cyclically calls the `readSerial()` method.
 
 An example is provided in files `example_APImode2.py` and `example_TransparentMode.py`, which use threading on methods defined in file `read_comm.py`.
+
+The threadable method `read_comm(xbee_obj)` in file `read_comm.py` is smartly using the _select_ option on the serial port which reacts as a hardware interrupt, blocking the execution of the thread till something is received (or sent) up to a maximum of 10 seconds. This allow a much less burden on the CPU but can only be used on Unix system (linux, mac, SBC running unix systems). For Windows systems it was instead implemented a read every 100ms.
 
 
 ## API Mode Features
@@ -200,7 +205,16 @@ The readSerial() method should be called iteratively at fast rates.
 
 This method requires no parameters.
 
-The data read from the serial buffer is continuously appended in a local buffer. 
+The user can get messages sent in transparent mode as:
+```
+xbee_msg = XB.readSerial()
+if xbee_msg:
+    print(xbee_msg)
+```
+
+
+___
+If using the **API mode** (with or without escaping chars), the data read from the serial buffer is continuously appended in a local buffer.
 The local buffer is split in one or several frames by using the DigiMesh start delimiter character 0x7E.
 A XBee msg object is created given each frame by using the `frame_type`; if the validation procedure is successful, the frame is removed from the local buffer and the created object is appended to a local
 list containing all the received messages.
@@ -209,9 +223,9 @@ The received-message list is then returned as output of the readSerial() method 
 
 The user can extract each object using:
 ```
-XBmsgList = XB.readSerial()
-while XBmsgList
-XBmsg = XBmsgList.pop(0)
+xbee_msg_list = XB.readSerial()
+while xbee_msg_list:
+    XBmsg = xbee_msg_list.pop(0)
 ```
 It is now possible to recognize each message by `XBmsg.frame_type`. For instance, if `frame_type` = `0x90`, it is possible to access the RF data by using `XBmsg.data` (in bytearray).
 
@@ -239,7 +253,7 @@ several responses (one from each device) are received in the form:
 ```
 
 In this example case, the received data can be interpreted in the following way:
-- `reserved`: `’FFFE’`
+- _reserved_: `’FFFE’`
 - high address: `’0013A200’`
 - low address: `’40E44BA9’`
 - node identifier: `’2000’`

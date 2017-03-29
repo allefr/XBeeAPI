@@ -2,6 +2,7 @@
 
 from serial import Serial
 import time
+import sys
 from datetime import datetime
 import os
 
@@ -46,8 +47,11 @@ class XBee_module:
         self.NO = '%x' % NO
 
         # if no port provided, try to find it between the ones available, depending on the OS being used
+        self.port = port
         if port is None:
-            port = serial_ports()
+            self.port = serial_ports()
+        # baud rate to use.. may be not the one preset in the XBee
+        self.baud = baud
 
         # list where to save received transmits (as objects of class XBee_msg or children)
         self.RxMsg = list()
@@ -80,7 +84,7 @@ class XBee_module:
                       'DB': []}         # RSSI (signal strength) of last received packet [-dBm]
 
         # set serial port and baud
-        self.serial_port = Serial(port=port, baudrate=baud)
+        self.serial_port = Serial(port=self.port, baudrate=self.baud)
 
         # make sure no information is in the serial buffer
         self._flush()
@@ -94,7 +98,7 @@ class XBee_module:
         self.rawLogFileIDstr = path + "XBeeRAW_log" + str(datetime.datetime.now()) + ".txt"
         print("Storing RAW Xbee log to: " + self.rawLogFileIDstr)
 
-        logStr = '\n\nXBee Communicating via ' + port
+        logStr = '\n\nXBee Communicating via ' + self.port
         print(logStr)
         self.logRAWtofile(logStr)
         xbee_type = 'ERR'
@@ -109,9 +113,9 @@ class XBee_module:
             xbee_mode = 'API mode (without escaping chars)'
         elif AP == 2:
             xbee_mode = 'API mode (with escaping chars)'
-        logStr = 'Programming XBee for\n\r\ttype: {}\n\r\t{}\n\r\tNetworkID: {}'.format(xbee_type,
-                                                                                        xbee_mode,
-                                                                                        self.XBconf['ID'])
+        logStr = 'Programming XBee for\n\ttype: {}\n\t{}\n\tNetworkID: {}'.format(xbee_type,
+                                                                                  xbee_mode,
+                                                                                  self.XBconf['ID'])
         print(logStr)
         self.logRAWtofile(logStr)
 
@@ -135,7 +139,9 @@ class XBee_module:
                 reg_value = '%s' % reg_value.decode()
                 while len(reg_value) < self.params[param]:
                     reg_value = '0' + reg_value
-                print("\tRegistry '{}': '0x{}'".format(param, reg_value))
+                logStr = "\tRegistry '{}': '0x{}'".format(param, reg_value)
+                print(logStr)
+                self.logRAWtofile(logStr)
 
                 # set params[AT] to the received value
                 self.params[param] = reg_value
@@ -160,6 +166,8 @@ class XBee_module:
                 be changed to 10ms instead of 1000ms so to make the process of manually settings registries faster
         :return:
         """
+        preset_baud = self.baud
+
         # wait guard time
         if first_init:
             time.sleep(1.)  # default guard time
@@ -171,9 +179,60 @@ class XBee_module:
 
         # wait guard time
         if first_init:
-            time.sleep(1.)  # default guard time
+            ok_received = False
+            time_req = time.time()
+            input_chars = bytearray([])
+            while not ok_received:
+                if time.time() - time_req > 1.2:
+                    print("ERR: OK not received!")
+                    break
+
+                while self.serial_port.inWaiting():
+                    input_chars.extend(self.serial_port.read())
+                if len(input_chars) >= 3:
+                    # note that other messages could have been received while starting the command mode, but nothing
+                    # can be received after the command mode is set, which is confirmed by 'OK\r' reply from XBee
+                    if input_chars[-3:] == bytearray([0x4F, 0x4B, 0x0D]):
+                        ok_received = True
+
+            # if still not received after 1.2 seconds, it means we are using a wrong baud rate
+            if not ok_received:
+                # the following function will automatically open the serial in the correct baud if any found
+                preset_baud = self.check_serial_baud_rate()
         else:
             time.sleep(.01)
+
+        if first_init and preset_baud != self.baud:
+            # need to change the baud on the module and in the serial communication
+
+            # define dictionary with correct values to set registry
+            xbee_baud = {1200: '0',
+                         2400: '1',
+                         4800: '2',
+                         9600: '3',
+                         19200: '4',
+                         38400: '5',
+                         57600: '6',
+                         115200: '7'}
+
+            if self.baud not in xbee_baud:
+                logStr = "'{}' not valid baud vaule! keeping preset value ('{}')".format(self.baud, preset_baud)
+                print(logStr)
+                self.logRAWtofile(logStr)
+            else:
+                logStr = "Programing the XBee for baud '{}'".format(self.baud)
+                print(logStr)
+                self.logRAWtofile(logStr)
+
+                # send command by making sure to write first and apply later
+                self._write(bytearray("ATBD{}\r,ATWR\r".format(xbee_baud[self.baud]).encode()))
+                time.sleep(.06)
+                self._write(bytearray("ATAC\r".encode()))
+
+                # restart local serial connection with new baud
+                self.serial_port.close()
+                time.sleep(.2)
+                self.serial_port = Serial(port=self.port, baudrate=self.baud)
 
         # flush buffer to make sure no message arrived while setting command mode
         self._flush()
@@ -250,6 +309,75 @@ class XBee_module:
 
         # if here means no reply in 1 seconds, which is definitely not right.. return None
         return None
+
+    def check_serial_baud_rate(self):
+        """
+        check which baud rate is preset in the Xbee module by trying all possible options:
+            BD: 0x0000 -> 1200 bps
+            BD: 0x0001 -> 2400 bps
+            BD: 0x0002 -> 4800 bps
+            BD: 0x0003 -> 9600 bps [default]
+            BD: 0x0004 -> 19200 bps
+            BD: 0x0005 -> 38400 bps
+            BD: 0x0006 -> 57600 bps
+            BD: 0x0007 -> 115200 bps
+
+        Note that it is unlikely that slower-than-9600 bps is used, so first checking most probably ones
+
+        :return:
+        """
+        bauds = [9600, 57600, 115200, 38400, 19200, 4800, 2400, 1200]
+        counter = 0
+
+        logStr = "WARN: Looking for preset baudrate for the XBee.."
+        print(logStr)
+        self.logRAWtofile(logStr)
+
+        while counter < len(bauds):
+            # close previously opened serial port in order to start a new one with the different baud
+            self.serial_port.close()
+
+            # wait guard time
+            time.sleep(1.)  # default guard time
+
+            # open new serial with new baud
+            logStr = "Checking baud '{}'".format(bauds[counter])
+            print(logStr)
+            self.logRAWtofile(logStr)
+            self.serial_port = Serial(port=self.port, baudrate=bauds[counter])
+
+            # start command mode
+            self._write(bytearray("+++".encode()))
+
+            # try to receive
+            ok_received = False
+            time_req = time.time()
+            input_chars = bytearray([])
+            while not ok_received:
+                if time.time() - time_req > 1.2:
+                    # print("ERR: OK not received!")
+                    break
+
+                while self.serial_port.inWaiting():
+                    input_chars.extend(self.serial_port.read())
+                if len(input_chars) >= 3:
+                    # note that other messages could have been received while starting the command mode, but nothing
+                    # can be received after the command mode is set, which is confirmed by 'OK\r' reply from XBee
+                    if input_chars[-3:] == bytearray([0x4F, 0x4B, 0x0D]):
+                        ok_received = True
+                        return bauds[counter]
+
+            # didn't work.. try next baud
+            counter += 1
+
+        # if here means no baud was successful.. error and exit app
+        logStr = "ERR: couldn't find preset baud on XBee.. exiting.."
+        print(logStr)
+        self.logRAWtofile(logStr)
+
+        # force exit
+        sys.exit(-1)
+
 
 # ===============================================================================
 #   define methods for Frame-Specific Data Construction
