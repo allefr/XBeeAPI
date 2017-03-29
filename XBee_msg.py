@@ -1,13 +1,18 @@
-"""
-@author: Francesco Vallegra
-SUTD         2016
+#!/usr/bin/env python
 
+"""
 Containing classes for DigiMesh protocol messages construction.
 Using superclass as general class defining basic methods and attributes
 Adding children classes for frame-specific data
 """
 
 import datetime     # timestamp all messages (incoming and outgoing)
+
+
+# authorship info
+__author__      = "Francesco Vallegra"
+__copyright__   = "Copyright 2016-2017, SUTD"
+__license__     = "MIT"
 
 
 # dictionary to interpret AT response status code
@@ -181,7 +186,7 @@ class XBee_msg:
 
 
 # ===============================================================================
-#   Child class: OUT - local XBee set/get AT (registers) commands
+#   Child class: OUT - local XBee set/get AT (registries) commands
 # ===============================================================================
 class XB_locAT_OUT(XBee_msg):
     """
@@ -238,7 +243,7 @@ class XB_locAT_OUT(XBee_msg):
         # create content of the message
         frameData = bytearray([self.frame_type, self.frame_ID]) + bytearray(self.ATcmd.encode())
 
-        # is the register value is provided, append it
+        # is the registry value is provided, append it
         if self.reg_value is not None:
             value = self.reg_value
             frameData += value
@@ -274,7 +279,7 @@ class XB_locAT_OUT(XBee_msg):
 
 
 # ===============================================================================
-#   Child class: OUT - remote XBee set/get AT (registers) commands
+#   Child class: OUT - remote XBee set/get AT (registries) commands
 # ===============================================================================
 class XB_remAT_OUT(XBee_msg):
     """
@@ -348,7 +353,7 @@ class XB_remAT_OUT(XBee_msg):
                     + bytearray([self.applyCh]) \
                     + bytearray(self.ATcmd.encode())
 
-        # is the register value is provided, append it
+        # is the registry value is provided, append it
         if self.reg_value is not None:
             value = bytearray.fromhex(self.reg_value)
             frameData += value
@@ -621,11 +626,11 @@ class XB_RFexpl_OUT(XBee_msg):
 
 
 # ===============================================================================
-#   Child class: IN - local XBee set/get AT (registers) response
+#   Child class: IN - local XBee set/get AT (registries) response
 # ===============================================================================
 class XB_locAT_IN(XBee_msg):
     """
-    Decode AT (register) commands from local XBee
+    Decode AT (registry) commands from local XBee
     """
 
     def __init__(self, XBparams, frame):
@@ -698,11 +703,11 @@ class XB_locAT_IN(XBee_msg):
 
 
 # ===============================================================================
-#   Child class: IN - remote XBee set/get AT (registers) response
+#   Child class: IN - remote XBee set/get AT (registries) response
 # ===============================================================================
 class XB_remAT_IN(XBee_msg):
     """
-    Decode AT (register) commands from remote XBee
+    Decode AT (registry) commands from remote XBee
     """
 
     def __init__(self, XBparams, frame):

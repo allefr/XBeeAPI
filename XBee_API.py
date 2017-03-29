@@ -1,9 +1,7 @@
-"""
-@author: Brandon Zoss, Francesco Vallegra
-MIT - SUTD  2015-2016
-"""
+#!/usr/bin/env python
+
 from serial import Serial
-from time import sleep
+import time
 from datetime import datetime
 import os
 
@@ -11,9 +9,16 @@ import os
 from XB_Finder import serial_ports
 from XBee_msg import *
 
+
+# authorship info
+__author__      = "Francesco Vallegra, Brandon Zoss"
+__copyright__   = "Copyright 2015-2017, MIT-SUTD"
+__license__     = "MIT"
+
+
 # create dictionary for API operations
 APIop = {0x88: ['AT Command Response', XB_locAT_IN, 1],     # name, reference to function, print (y/n)
-         0x8B: ['Transmit Status', XB_RFstatus_IN, 1],
+         0x8B: ['Transmit Status', XB_RFstatus_IN, 0],
          0x8D: ['Route Information Packet', XB_RouteInfo_IN, 1],
          0x90: ['Receive Packet (AO=0)', XB_RF_IN, 0],
          0x91: ['Explicit Rx Indicator (AO=1)', XB_RFexpl_IN, 1],
@@ -27,12 +32,21 @@ APIop = {0x88: ['AT Command Response', XB_locAT_IN, 1],     # name, reference to
 # ===============================================================================
 class XBee_module:
 
-    def __init__(self, port=None, baud=9600, ID=0x7FFF, AP=0x02, AO=0x00, NO=0x04):
+    def __init__(self, port=None, baud=9600, ID=0x7FFF, AP=0x02, CE=0x00, NO=0x04):
         """
         XBee initialization
         """
+        # network ID
+        self.ID = '%x' % ID
+        # API mode enabled/disabled [0:no API; 1:API no escape seq; 2:API with escape seq]
+        self.AP = '%x' % AP
+        # Routing/Message mode [0: Router; 1:NA; 2:EndNode]
+        self.CE = '%x' % CE
+        # additional info
+        self.NO = '%x' % NO
 
-        if not port:
+        # if no port provided, try to find it between the ones available, depending on the OS being used
+        if port is None:
             port = serial_ports()
 
         # list where to save received transmits (as objects of class XBee_msg or children)
@@ -42,35 +56,35 @@ class XBee_module:
         self.RxBuff = bytearray()
 
         # XBee configuration
-        self.XBconf = {'ID': ID,    # Network ID (between 0x0000 and 0x7FFF)
-                       'AP': AP,    # API mode
-                       'AO': AO,    # API Output format
-                       'NO': NO}    # include additional info when network and neighbor discovery
+        self.XBconf = {'ID': self.ID,   # Network ID (between 0x0000 and 0x7FFF)
+                       'AP': self.AP,   # API mode
+                       'CE': self.CE,   # Routing/Message mode
+                       'NO': self.NO,   # include additional info when network and neighbor discovery
+                       'DH': 'FFFF',    # destination Address High to broadcast
+                       'DL': '0'}       # destination Address Low to broadcast
 
-        # enquire main parameters from local XBee
-        self.params = {'ID': [],    # Network ID (between 0x0000 and 0x7FFF)
-                       'CE': [],    # Node type
-                       'BH': [],    # Broadcast radius
-                       'NT': [],    # Maximum seconds for waiting a NetworkDiscover reply (10th of sec)
-                       'SH': [],    # Local Address High (high 32bit RF module's address)
-                       'SL': [],    # Local Address Low (low 32bit RF module's address)
-                       'DH': [],    # Destination Address High
-                       'DL': [],    # Destination Address Low
-                       'AP': [],    # API mode [0:no API; 1:API no escape seq; 2:API with escape seq]
-                       'AO': []}    # API output format [0:standard frames; 1:explicit addressing frames]
+        # enquire main parameters from local XBee (initial value is the number of bytes to use)
+        self.params = {'ID': 4,        # Network ID (between 0x0000 and 0x7FFF)
+                       'CE': 2,        # Node type
+                       'BH': 2,        # Broadcast radius
+                       'SH': 8,        # Local Address High (high 32bit RF module's address)
+                       'SL': 8,        # Local Address Low (low 32bit RF module's address)
+                       'DH': 8,        # Destination Address High
+                       'DL': 8,        # Destination Address Low
+                       'AP': 2}        # API mode [0:no API; 1:API no escape seq; 2:API with escape seq]
 
         # diagnostic parameters
-        self.diagn = {'GD': [],     # number of good frames
-                      'EA': [],     # number of timeouts
-                      'TR': [],     # number of transmission errors
-                      'DB': []}     # RSSI (signal strength) of last received packet [-dBm]
+        self.diagn = {'GD': [],         # number of good frames
+                      'EA': [],         # number of timeouts
+                      'TR': [],         # number of transmission errors
+                      'DB': []}         # RSSI (signal strength) of last received packet [-dBm]
 
         # set serial port and baud
         self.serial_port = Serial(port=port, baudrate=baud)
 
         # make sure no information is in the serial buffer
         self._flush()
-        sleep(0.2)
+        time.sleep(0.2)
         self._flush()
 
         # start logging RAW data from/to XBee
@@ -78,27 +92,54 @@ class XBee_module:
         if not os.path.exists(path):
             os.makedirs(path)
         self.rawLogFileIDstr = path + "XBeeRAW_log" + str(datetime.datetime.now()) + ".txt"
-        self.testLogFileIDstr = path + "XBeeTEST_log" + str(datetime.datetime.now()) + ".txt"
-        self.setFile()
+        print("Storing RAW Xbee log to: " + self.rawLogFileIDstr)
 
         logStr = '\n\nXBee Communicating via ' + port
         print(logStr)
         self.logRAWtofile(logStr)
-        logStr = 'Programming XBee for API mode {0}...'.format(self.XBconf['AP'])
+        xbee_type = 'ERR'
+        if CE == 0:
+            xbee_type = 'Router'
+        elif CE == 2:
+            xbee_type = 'EndPoint'
+        xbee_mode = 'ERR'
+        if AP == 0:
+            xbee_mode = 'Transparent Mode'
+        elif AP == 1:
+            xbee_mode = 'API mode (without escaping chars)'
+        elif AP == 2:
+            xbee_mode = 'API mode (with escaping chars)'
+        logStr = 'Programming XBee for\n\r\ttype: {}\n\r\t{}\n\r\tNetworkID: {}'.format(xbee_type,
+                                                                                        xbee_mode,
+                                                                                        self.XBconf['ID'])
         print(logStr)
         self.logRAWtofile(logStr)
 
         # set parameters' values from self.XBconf
-        for param in self.XBconf:
-            print(self.setLocalRegister(param, self.XBconf[param]))
-            sleep(0.05)
-            self.readSerial()
+        ATregs = list()
+        ATvals = list()
+        for reg in self.XBconf:
+            ATregs.append(reg)
+            ATvals.append(self.XBconf[reg])
+        self.cmd_mode_set_registries(ATregs, ATvals, first_init=True)
+
+        logStr = '\nReading Settings from XBee..'
+        print(logStr)
+        self.logRAWtofile(logStr)
 
         # get parameters' values from XBee memory
         for param in self.params:
-            print(self.getLocalRegister(param))
-            sleep(0.05)
-            self.readSerial()
+            reg_value = self.cmd_mode_read_registry(param)
+
+            if reg_value is not None:
+                reg_value = '%s' % reg_value.decode()
+                while len(reg_value) < self.params[param]:
+                    reg_value = '0' + reg_value
+                print("\tRegistry '{}': '0x{}'".format(param, reg_value))
+
+                # set params[AT] to the received value
+                self.params[param] = reg_value
+        print('')
 
         logStr = 'XBee initialization complete!\n'
         print(logStr)
@@ -106,15 +147,120 @@ class XBee_module:
 
 
 # ===============================================================================
+#   define methods for Command Mode operations
+# ===============================================================================
+    def cmd_mode_set_registries(self, registries, values, first_init=False):
+        """
+        Method used to manually set registries of the XBee in case we don't know what is the last configuration flashed.
+        Note however that the BaudRate must be correct..
+
+        :param registries: list of registries to set
+        :param values: list of values for the registries
+        :param first_init: flag to know if it's the first time we set registries or not. If yes, the guard time will
+                be changed to 10ms instead of 1000ms so to make the process of manually settings registries faster
+        :return:
+        """
+        # wait guard time
+        if first_init:
+            time.sleep(1.)  # default guard time
+        else:
+            time.sleep(.01)
+
+        # start command mode
+        self._write(bytearray("+++".encode()))
+
+        # wait guard time
+        if first_init:
+            time.sleep(1.)  # default guard time
+        else:
+            time.sleep(.01)
+
+        # flush buffer to make sure no message arrived while setting command mode
+        self._flush()
+
+        settings_list = ''
+        # set guard time to 10ms instead of 1s
+        if first_init:
+            settings_list += ',ATGTA\r'
+        for reg, val in zip(registries, values):
+            settings_list += ',AT{}{}\r'.format(reg, val)
+
+        # apply changes and write
+        settings_list += ',ATAC\r,ATWR\r'
+
+        # write
+        self._write(bytearray(settings_list.encode()))
+
+        # there should be no errors, so flush buffers   # TODO: check needed anyway??
+        time.sleep(0.2)
+        self._flush()
+
+        # exit command mode (Send command after flushing to give time to the XBee to write commands ot flash memory)
+        self._write(bytearray("ATCN\r".encode()))
+        time.sleep(0.1)
+        self._flush()
+
+    def cmd_mode_read_registry(self, registry):
+        """
+        Method used to manually read a registry from the XBee using the command mode
+
+        :param registry: registry name as per DigiMesh documentation
+        :return: answer in hex from the XBee or None if no answer from XBee
+        """
+        # wait guard time
+        time.sleep(.01)
+
+        # start command mode
+        self._write(bytearray("+++".encode()))
+
+        # wait guard time
+        time.sleep(.01)
+
+        ok_received = False
+        time_req = time.time()
+        input_chars = bytearray([])
+        while not ok_received:
+            if time.time() - time_req > 1.:
+                print("ERR: OK not received!")
+                return None
+
+            while self.serial_port.inWaiting():
+                input_chars.extend(self.serial_port.read())
+            if len(input_chars) >= 3:
+                # here note that other messages could have been received while starting the command mode, but nothing
+                # can be received after the command mode is set, which is confirmed by 'OK\r' reply from XBee
+                if input_chars[-3:] == bytearray([0x4F, 0x4B, 0x0D]):
+                    ok_received = True
+
+        # send manual command to get the registry value and command to exit command mode
+        self._write(bytearray('AT{}\r,ATCN\r'.format(registry).encode()))
+
+        # read XBee reply
+        time_req = time.time()
+        input_chars = bytearray([])
+        while time.time() - time_req < 1.:
+            while self.serial_port.inWaiting():
+                input_chars.extend(self.serial_port.read())
+
+            if len(input_chars) >= 3:
+                # the exit command mode will reply with 'OK\r', so anything before that is the reply
+                if input_chars[-3:] == bytearray([0x4F, 0x4B, 0x0D]):
+                    # return anything before the OK
+                    return input_chars[:-4]
+
+        # if here means no reply in 1 seconds, which is definitely not right.. return None
+        return None
+
+# ===============================================================================
 #   define methods for Frame-Specific Data Construction
 # ===============================================================================
-    def setLocalRegister(self, command, value, frame_ID=0x52):
-        return self._setgetLocalRegister(command, value, frame_ID=frame_ID)
+    def setLocalRegistry(self, command, value, frame_ID=0x52):
+        return self._setgetLocalRegistry(command, value, frame_ID=frame_ID)
 
-    def getLocalRegister(self, command, frame_ID=0x52):
-        return self._setgetLocalRegister(command, frame_ID=frame_ID)
+    def getLocalRegistry(self, command, frame_ID=0x52):
+        return self._setgetLocalRegistry(command, frame_ID=frame_ID)
 
-    def _setgetLocalRegister(self, command, value=None, frame_ID=0x52):
+    def _setgetLocalRegistry(self, command, value=None, frame_ID=0x52):
         """
         Query or set module parameters on the local device.
 
@@ -123,7 +269,7 @@ class XBee_module:
                 If not provided, meaning a request
         :param frame_ID: default value 0x52. Change it if you know what you are doing..
         :return: XBee_msg object containing the created message.
-                Can be printed using print(setLocalRegister(..))
+                Can be printed using print(_setLocalRegistry(..))
         """
         # create new XB_locAT_OUT object and write to serial
         XBmsg = XB_locAT_OUT(self.params, command, regVal=value, frame_ID=frame_ID)
@@ -135,13 +281,13 @@ class XBee_module:
 
         return XBmsg
 
-    def setRemoteRegister(self, destH, destL, command, value, frame_ID=0x01):
-        return self._setgetRemoteRegister(destH, destL, command, value, frame_ID=frame_ID)
+    def setRemoteRegistry(self, destH, destL, command, value, frame_ID=0x01):
+        return self._setgetRemoteRegistry(destH, destL, command, value, frame_ID=frame_ID)
 
-    def getRemoteRegister(self, destH, destL, command, frame_ID=0x01):
-        return self._setgetRemoteRegister(destH, destL, command, frame_ID=frame_ID)
+    def getRemoteRegistry(self, destH, destL, command, frame_ID=0x01):
+        return self._setgetRemoteRegistry(destH, destL, command, frame_ID=frame_ID)
 
-    def _setgetRemoteRegister(self, destH, destL, command, value=None, frame_ID=0x01):
+    def _setgetRemoteRegistry(self, destH, destL, command, value=None, frame_ID=0x01):
         """
         Query or set module parameters on a remote device.
 
@@ -150,7 +296,7 @@ class XBee_module:
                 If not provided, meaning a request
         :param frame_ID: default value 0x52. Change it if you know what you are doing..
         :return: XBee_msg object containing the created message.
-                Can be printed using print(setRemoteRegister(..))
+                Can be printed using print(setRemoteRegistry(..))
         """
         self.params['DH'] = destH
         self.params['DL'] = destL
@@ -221,9 +367,8 @@ class XBee_module:
 # ===============================================================================
     def _flush(self):
         """
-        Dump all data waiting in the incoming
-        serial port to be sure there is no data
-        upon looking for specified responses
+        Dump all data waiting in the incoming serial port to be sure there is no data upon looking for specified
+        responses
         """
         self.serial_port.flush()
         self.serial_port.flushInput()
@@ -234,7 +379,8 @@ class XBee_module:
 
     def _write(self, msg):
         """
-        send data to serial communication to XBee
+        Send data to serial communication to XBee
+
         :param msg: DigiMesh frame as bytearray
         :return: None
         """
@@ -242,27 +388,33 @@ class XBee_module:
 
     def readSerial(self):
         """
-        Receives data from serial and
-        checks buffer for potential messages.
-        Stacks all messages into the queue
-        if available, for later execution.
-        """
-        # clear received correct message as object list
-        self.RxMsg = list()
+        Receives data from serial.
+        If in API mode, will also checks buffer for potential messages and stacks them into a queue for evaluation.
 
-        # Read incoming buffer and pack it into the RxStream
+        :return: list of byte received as bytearray or list of API packets as bytearrays if in API mode
+        """
+        # read incoming buffer and pack it into the RxStream
         while self.serial_port.inWaiting():
             incoming = self.serial_port.read()
             self.RxBuff.extend(incoming)
-            # sleep(0.001)
+            # time.sleep(0.001)
 
-        # Split the Rx stream by XBee Start byte (0x7E). OBS: byte 0x7E is stripped away!
+        # if in Transparent Mode, just return everything read and clear the buffer
+        if self.params['AP'] == '00':
+            data = self.RxBuff
+            self.RxBuff = bytearray([])
+            return data
+
+        # clear received correct message as API object list
+        self.RxMsg = list()
+
+        # split the Rx stream by XBee Start byte (0x7E). OBS: byte 0x7E is stripped away!
         msgs = self.RxBuff.split(bytes(b'\x7E'))
 
-        # Add the good messages to the Rx Frames buffer
+        # add the good messages to the Rx Frames buffer
         self._stack_frame(msgs)
 
-        # Hold on to remaining bytes that may have not validated
+        # hold on to remaining bytes that may have not validated
         if len(self.RxMsg) > 0 and not self.RxMsg[-1].isValid():
             # discard last obj and put msg back in buffer
             self.RxMsg.pop(-1)
@@ -271,7 +423,7 @@ class XBee_module:
             self.RxBuff = msgs[-1][1:]
         else:
             # clear the buffer
-            self.RxBuff = bytearray()
+            self.RxBuff = bytearray([])
 
         return self.RxMsg
 
@@ -351,7 +503,7 @@ class XBee_module:
         :return:
         """
         if destH.upper() == 'LOCAL' or destL.upper() == 'LOCAL':
-            print(self.getLocalRegister('FN'))
+            print(self.getLocalRegistry('FN'))
 
             return
         elif destH.upper() == 'GLOBAL' or destL.upper() == 'GLOBAL':
@@ -364,9 +516,9 @@ class XBee_module:
         if not destH or not destL:
             return
 
-        # if address equal to local XBee, then use local register methods
+        # if address equal to local XBee, then use local registry methods
         if destH.lower() == self.params['SH'] and destL.lower() == self.params['SL']:
-            print(self.getLocalRegister('FN'))
+            print(self.getLocalRegistry('FN'))
 
             return
         # if address is for broadcast, then stop! not allowed
@@ -374,7 +526,7 @@ class XBee_module:
             print('Attempting to broadcast findNeighbors! not allowed :(')
             return
 
-        print(self.getRemoteRegister(destH, destL, 'FN'))
+        print(self.getRemoteRegistry(destH, destL, 'FN'))
 
 
 # ===============================================================================
@@ -445,7 +597,7 @@ class XBee_module:
 
         :return:
         """
-        print(self.getLocalRegister('ND'))
+        print(self.getLocalRegistry('ND'))
 
     def traceRoute(self, destH, destL):
         """
@@ -484,42 +636,17 @@ class XBee_module:
 # ===============================================================================
 #   Log RAW data coming/outgoing from/to XBee
 # ===============================================================================
-    def setFile(self):
-        """
-        Create file for storing incoming strings.
-        File is continuously appended to itself -> may want to change this to create new file every session
-        """
-
-        # file = open(self.rawLogFileIDstr, 'w+')
-
-        print("Storing RAW Xbee log to: " + self.rawLogFileIDstr)
-        print("Storing test Xbee log to: " + self.testLogFileIDstr)
-        fileID = open(self.testLogFileIDstr, 'a')
-        fileID.write("\n\n\n" + str(datetime.datetime.now()) + " new TEST attempt\n")
-        fileID.flush()
-
     def logRAWtofile(self, line):
         """
-        Write RAW data streams to a file
-        for post-processing and logging
+        Write RAW data streams to a file for post-processing and logging
         """
         with open(self.rawLogFileIDstr, 'a') as fileID:
             fileID.write(str(line) + '\n')
             fileID.flush()
-
-    def logTESTtofile(self, line):
-        """
-        Write TEST data streams to a file
-        for post-processing and logging
-        """
-        with open(self.testLogFileIDstr, 'a') as fileID:
-            fileID.write(str(line))
-            fileID.flush()
-
 
 # ===============================================================================
 #   Establish Print Method
 # ===============================================================================
     def __str__(self):
 
-        return "XBee " + str(self.params['SL']) + " Communicating via " + self.serial_port
+        return "XBee " + str(self.params['SL']) + " Communicating via " + str(self.serial_port)
