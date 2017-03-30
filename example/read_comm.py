@@ -121,8 +121,6 @@ def read_comm(x_bee_obj):
         x_bee_obj.serial_port.nonblocking()  # needed when using "select"
 
     while 1:
-
-        # API mode without escape chars (AP=0x01) or with escape chars (AP=0x02)
         try:
             if sys.platform.startswith('win'):
                 # select does not work on windows, so just sleep instead (more cpu usage)
@@ -139,7 +137,7 @@ def read_comm(x_bee_obj):
             xbee_msg_list = []
 
         if x_bee_obj.params['AP'] == '01' or x_bee_obj.params['AP'] == '02':
-            # try decoding message
+            # API mode without escape chars (AP=0x01) or with escape chars (AP=0x02)
             while xbee_msg_list:
                 # get first element in the list
                 try:
@@ -160,7 +158,7 @@ def read_comm(x_bee_obj):
 if __name__ == '__main__':
     # create XBee module object
     # x_bee = XBee_API.XBee_module()
-    x_bee = XBee_API.XBee_module(baud=9600, AP=0, CE=2)
+    x_bee = XBee_API.XBee_module(baud=57600, AP=0, CE=2)
 
     # thread for the incoming XBee messages
     comm_thread = threading.Thread(target=read_comm, args=(x_bee,))

@@ -64,8 +64,8 @@ class XBee_module:
                        'AP': self.AP,   # API mode
                        'CE': self.CE,   # Routing/Message mode
                        'NO': self.NO,   # include additional info when network and neighbor discovery
-                       'DH': 'FFFF',    # destination Address High to broadcast
-                       'DL': '0'}       # destination Address Low to broadcast
+                       'DL': 'FFFF',    # destination Address High to broadcast
+                       'DH': '0'}       # destination Address Low to broadcast
 
         # enquire main parameters from local XBee (initial value is the number of bytes to use)
         self.params = {'ID': 4,        # Network ID (between 0x0000 and 0x7FFF)
